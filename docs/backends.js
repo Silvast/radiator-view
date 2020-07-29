@@ -24,25 +24,25 @@ function buildBackend(settings, callback) {
   } else if (settings.mode === 'drone') {
     backend = droneBackend
   }
-  var branchFilter = function(build) {
+  var branchFilter = function (build) {
     return settings.branch ? build.branch.match(settings.branch) : true
   }
-  var repositoryFilter = function(build) {
+  var repositoryFilter = function (build) {
     return settings.repositories
       ? settings.repositories.split(',').includes(build.repository)
       : true
   }
 
-  return function() {
-    backend(settings, function(err, data) {
+  return function () {
+    backend(settings, function (err, data) {
       if (err) {
         return callback(err)
       }
       let builds = data.filter(repositoryFilter).filter(branchFilter)
-      builds = _.uniqBy(builds, function(b) {
+      builds = _.uniqBy(builds, function (b) {
         return b.repository + b.branch
       })
-      builds = builds.sort(function(a, b) {
+      builds = builds.sort(function (a, b) {
         return a.started.getTime() - b.started.getTime()
       })
       callback(undefined, builds)
@@ -55,28 +55,28 @@ function backendOptions() {
     circle: {
       name: 'Circle CI',
       url: 'https://circleci.com/api/v1/projects',
-      token: undefined
+      token: undefined,
     },
     travis: {
       name: 'Travis CI',
-      url: 'https://api.travis-ci.com/repos',
-      token: undefined
+      url: 'https://api.travis-ci.com',
+      token: undefined,
     },
     jenkins: {
       name: 'Jenkins CI',
       url: undefined,
-      token: undefined
+      token: undefined,
     },
     cloudwatch: {
       name: 'AWS CloudWatch',
       url: 'https://monitoring.eu-west-1.amazonaws.com/',
-      token: undefined
+      token: undefined,
     },
     drone: {
       name: 'Drone CI',
       url: undefined,
-      token: undefined
-    }
+      token: undefined,
+    },
   }
 }
 
@@ -84,10 +84,10 @@ function httpRequest(url, handler /*, headers */) {
   var request = new XMLHttpRequest()
   var headers = arguments[2] || {}
   request.open('GET', url, true)
-  Object.keys(headers).forEach(function(headerName) {
+  Object.keys(headers).forEach(function (headerName) {
     request.setRequestHeader(headerName, headers[headerName])
   })
-  request.onload = function() {
+  request.onload = function () {
     if (request.status === 401 || request.status === 403) {
       handler('Invalid API token (' + request.status + ' ' + request.responseText + ')')
     } else if (request.status >= 200 && request.status < 400) {
@@ -105,9 +105,9 @@ function httpRequest(url, handler /*, headers */) {
   request.send()
 }
 
-var travisBackend = function(settings, resultCallback) {
-  var travisRequest = function(url, cb) {
-    var handler = function(err, data) {
+var travisBackend = function (settings, resultCallback) {
+  var travisRequest = function (url, cb) {
+    var handler = function (err, data) {
       if (err) {
         resultCallback(err)
       } else {
@@ -116,41 +116,33 @@ var travisBackend = function(settings, resultCallback) {
     }
     httpRequest(url, handler, {
       Accept: 'application/vnd.travis-ci.2+json',
-      Authorization: 'token ' + settings.token
+      Authorization: 'token ' + settings.token,
+      'Travis-API-Version': 3,
     })
   }
 
-  var translateBuild = function(reponame, commits) {
-    var findCommit = function(commit) {
-      return commits.find(function(c) {
-        return c.id == commit
-      })
-    }
-    return function(b) {
-      var commit = findCommit(b.commit_id)
-      return {
-        repository: reponame,
-        branch: commit.branch,
-        started: new Date(b.started_at),
-        state: b.state,
-        commit: {
-          created: new Date(commit.committed_at),
-          author: commit.author_name,
-          hash: commit.sha
-        }
-      }
+  var translateBuild = function (build) {
+    return {
+      repository: build.repository.name,
+      branch: build.branch.name,
+      started: new Date(build.started_at),
+      state: build.state,
+      commit: {
+        created: new Date(build.commit.committed_at),
+        author: build.commit.author_name,
+        hash: build.commit.sha,
+      },
     }
   }
 
-  var parseBuilds = function(repos) {
+  var parseBuilds = function (repos) {
     var responses = []
-    repos.forEach(function(r) {
-      travisRequest(settings.url + '/' + r.name + '/builds', function(data) {
-        var reponame = r.name.split('/')[1]
-        var builds = data.builds.map(translateBuild(reponame, data.commits))
+    repos.forEach(function (r) {
+      travisRequest(settings.url + '/repo/' + r.id + '/builds', function (data) {
+        var builds = data.builds.map(translateBuild)
         responses.push(builds)
         if (responses.length === repos.length) {
-          var result = responses.reduce(function(acc, item) {
+          var result = responses.reduce(function (acc, item) {
             return item.length > 0 ? acc.concat(item) : acc
           }, [])
           resultCallback(undefined, result)
@@ -159,27 +151,27 @@ var travisBackend = function(settings, resultCallback) {
     })
   }
 
-  travisRequest(settings.url, function(data) {
+  travisRequest(settings.url + '/repos', function (data) {
     parseBuilds(
-      data.repos.map(function(repo) {
+      data.repositories.map(function (repo) {
         return { id: repo.id, name: repo.slug }
       })
     )
   })
 }
 
-var circleBackend = function(settings, resultCallback) {
+var circleBackend = function (settings, resultCallback) {
   var url = settings.url + '?circle-token=' + settings.token
   httpRequest(
     url,
-    function(err, data) {
+    function (err, data) {
       if (err) {
         return resultCallback(err)
       }
       var builds = data
-        .reduce(function(acc, repository) {
+        .reduce(function (acc, repository) {
           return acc.concat(
-            Object.keys(repository.branches).map(function(branchName) {
+            Object.keys(repository.branches).map(function (branchName) {
               var branch = repository.branches[branchName]
               var hasNeverBuilt = !branch.running_builds && !branch.recent_builds
               if (hasNeverBuilt) {
@@ -203,26 +195,26 @@ var circleBackend = function(settings, resultCallback) {
                 commit: {
                   created: new Date(build.pushed_at),
                   author: null,
-                  hash: build.vcs_revision
-                }
+                  hash: build.vcs_revision,
+                },
               }
             })
           )
         }, [])
-        .filter(function(build) {
+        .filter(function (build) {
           return !!build
         })
       resultCallback(undefined, builds)
     },
     {
-      Accept: 'application/json'
+      Accept: 'application/json',
     }
   )
 }
 
-var jenkinsBackend = function(settings, resultCallback) {
-  var jenkinsRequest = function(url, cb) {
-    var handler = function(err, data) {
+var jenkinsBackend = function (settings, resultCallback) {
+  var jenkinsRequest = function (url, cb) {
+    var handler = function (err, data) {
       if (err) {
         resultCallback(err)
       } else {
@@ -236,43 +228,43 @@ var jenkinsBackend = function(settings, resultCallback) {
     httpRequest(url, handler, headers)
   }
 
-  var findLastCommit = function(builds) {
+  var findLastCommit = function (builds) {
     if (!builds) {
       return undefined
     }
-    var lastBuildWithCommits = builds.filter(function(b) {
+    var lastBuildWithCommits = builds.filter(function (b) {
       return b.changeSets && b.changeSets.length > 0
     })[0]
     if (!lastBuildWithCommits) {
       return undefined
     }
-    var lastCommits = lastBuildWithCommits.changeSets[0].items.map(function(item) {
+    var lastCommits = lastBuildWithCommits.changeSets[0].items.map(function (item) {
       return {
         created: new Date(item.timestamp),
         author: item.author.fullName,
-        hash: item.commitId
+        hash: item.commitId,
       }
     })
     return lastCommits[lastCommits.length - 1]
   }
 
-  var findBuildReason = function(builds) {
+  var findBuildReason = function (builds) {
     if (!builds) {
       return undefined
     }
-    var lastBuildWithActions = builds.filter(function(b) {
+    var lastBuildWithActions = builds.filter(function (b) {
       return b.actions && b.actions.length > 0
     })[0]
     if (!lastBuildWithActions) {
       return undefined
     }
     var reason = lastBuildWithActions.actions
-      .filter(function(a) {
+      .filter(function (a) {
         return a._class == 'hudson.model.CauseAction'
       })
-      .reduce(function(acc, a) {
+      .reduce(function (acc, a) {
         return acc.concat(
-          a.causes.map(function(c) {
+          a.causes.map(function (c) {
             return c.shortDescription
           })
         )
@@ -280,15 +272,15 @@ var jenkinsBackend = function(settings, resultCallback) {
       .join(';')
 
     return {
-      author: reason
+      author: reason,
     }
   }
 
-  var findResponsible = function(job) {
+  var findResponsible = function (job) {
     if (!job.actions) {
       return undefined
     }
-    var contributorActions = job.actions.filter(function(action) {
+    var contributorActions = job.actions.filter(function (action) {
       return action.contributor || action.contributorDisplayName
     })
     var contributor = contributorActions[0]
@@ -297,17 +289,17 @@ var jenkinsBackend = function(settings, resultCallback) {
     }
     return {
       created: new Date(job.timestamp),
-      author: contributor.contributorDisplayName || contributor.contributor
+      author: contributor.contributorDisplayName || contributor.contributor,
     }
   }
 
   var url =
     settings.url +
     '/api/json?depth=4&tree=name,url,jobs[name,url,jobs[name,url,actions[contributor,contributorDisplayName,contributorEmail],buildable,builds[result,building,actions[causes[shortDescription]],changeSets[items[author[fullName],timestamp,commitId]],timestamp]]]'
-  jenkinsRequest(url, function(data) {
-    var builds = data.jobs.reduce(function(acc, project) {
+  jenkinsRequest(url, function (data) {
+    var builds = data.jobs.reduce(function (acc, project) {
       return acc.concat(
-        project.jobs.reduce(function(acc, job) {
+        project.jobs.reduce(function (acc, job) {
           if (!job.buildable) {
             return acc
           }
@@ -327,7 +319,7 @@ var jenkinsBackend = function(settings, resultCallback) {
             started: new Date(build.timestamp),
             state: result,
             commit:
-              findLastCommit(job.builds) || findResponsible(job) || findBuildReason(job.builds)
+              findLastCommit(job.builds) || findResponsible(job) || findBuildReason(job.builds),
           })
         }, [])
       )
@@ -336,20 +328,20 @@ var jenkinsBackend = function(settings, resultCallback) {
   })
 }
 
-var cloudWatchBackend = function(settings, resultCallback) {
+var cloudWatchBackend = function (settings, resultCallback) {
   var creds = settings.token.split(':')
   var region = settings.url.split('.')[1]
   var cloudwatch = new AWS.CloudWatch({
     accessKeyId: creds[0],
     secretAccessKey: creds[1],
-    region: region
+    region: region,
   })
   var params = {}
-  cloudwatch.describeAlarms(params, function(err, data) {
+  cloudwatch.describeAlarms(params, function (err, data) {
     if (err) {
       return resultCallback(err)
     }
-    var builds = data.MetricAlarms.map(function(alarm) {
+    var builds = data.MetricAlarms.map(function (alarm) {
       var result = 'canceled'
       if (alarm.StateValue === 'OK') {
         result = 'success'
@@ -359,35 +351,35 @@ var cloudWatchBackend = function(settings, resultCallback) {
       return {
         repository: alarm.AlarmName,
         started: alarm.StateUpdatedTimestamp,
-        state: result
+        state: result,
       }
     })
     resultCallback(undefined, builds)
   })
 }
 
-var droneBackend = function(settings, resultCallback) {
+var droneBackend = function (settings, resultCallback) {
   var conf = settings.token.split(':')
   var token = conf.length === 2 ? conf[1] : conf[0]
   var namespaces = conf.length === 2 ? conf[0].split(',') : null
 
-  var droneRequest = function(url, cb) {
-    var handler = function(err, data) {
+  var droneRequest = function (url, cb) {
+    var handler = function (err, data) {
       if (err) {
         return resultCallback(err)
       }
       cb(data)
     }
     httpRequest(url, handler, {
-      Authorization: 'Bearer ' + token
+      Authorization: 'Bearer ' + token,
     })
   }
 
-  var latestBuild = function(builds, build) {
+  var latestBuild = function (builds, build) {
     if (build === undefined) {
       return builds
     }
-    var found = builds.find(function(item) {
+    var found = builds.find(function (item) {
       return item && item.branch === build.branch
     })
     if (found) {
@@ -400,10 +392,10 @@ var droneBackend = function(settings, resultCallback) {
     return build ? builds.concat(build) : builds
   }
 
-  var translateBuild = function(reponame) {
+  var translateBuild = function (reponame) {
     var weekInSeconds = 7 * 24 * 60 * 60
     var weekAgo = new Date().getTime() / 1000 - weekInSeconds
-    return function(b) {
+    return function (b) {
       if (b.event === 'pull_request' || b.target !== 'master') {
         if (b.updated < weekAgo) {
           // ignore old PR builds and old branch builds
@@ -444,26 +436,26 @@ var droneBackend = function(settings, resultCallback) {
         commit: {
           created: undefined,
           author: b.author_name || b.author_login,
-          hash: undefined
-        }
+          hash: undefined,
+        },
       }
     }
   }
 
-  var parseBuilds = function(repos) {
+  var parseBuilds = function (repos) {
     var responses = []
-    repos.forEach(function(r) {
-      droneRequest(settings.url + '/api/repos/' + r.full_name + '/builds?page=1', function(data) {
+    repos.forEach(function (r) {
+      droneRequest(settings.url + '/api/repos/' + r.full_name + '/builds?page=1', function (data) {
         var builds = data.map(translateBuild(r.name)).reduce(latestBuild, [])
         responses.push(builds)
         if (responses.length === repos.length) {
-          var result = responses.reduce(function(acc, item) {
+          var result = responses.reduce(function (acc, item) {
             // find PRs that are closed by other builds
-            var closedPrs = item.reduce(function(acc, i) {
+            var closedPrs = item.reduce(function (acc, i) {
               return i.closesPr ? acc.concat(i.closesPr) : acc
             }, [])
             // filter closed PR builds from build list
-            item = item.filter(function(i) {
+            item = item.filter(function (i) {
               return !~closedPrs.indexOf(i.branch)
             })
             return item.length > 0 ? acc.concat(item) : acc
@@ -474,17 +466,17 @@ var droneBackend = function(settings, resultCallback) {
     })
   }
 
-  var translateRepo = function(repo) {
+  var translateRepo = function (repo) {
     return {
       id: repo.id,
       name: repo.name,
       full_name: repo.slug,
       namespace: repo.namespace,
-      active: repo.active
+      active: repo.active,
     }
   }
 
-  var repoFilter = function(repo) {
+  var repoFilter = function (repo) {
     if (namespaces && !namespaces.includes(repo.namespace)) {
       return false
     }
@@ -492,7 +484,7 @@ var droneBackend = function(settings, resultCallback) {
   }
 
   var url = settings.url + '/api/user/repos'
-  droneRequest(url, function(data) {
+  droneRequest(url, function (data) {
     parseBuilds(data.map(translateRepo).filter(repoFilter))
   })
 }
